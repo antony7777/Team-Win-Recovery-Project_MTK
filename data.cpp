@@ -40,6 +40,7 @@
 #include "data.hpp"
 #include "partitions.hpp"
 #include "twrp-functions.hpp"
+#include "cutils/properties.h"
 
 extern "C"
 {
@@ -85,11 +86,52 @@ void DataManager::sanitize_device_id(char* device_id) {
 void DataManager::get_device_id(void) {
 	FILE *fp;
 	char line[2048];
-	char hardware_id[32], device_id[64];
-	char* token;
+	char hardware_id[32], device_id[64], model_id[32];
+	char* token, space;
 
     // Assign a blank device_id to start with
     device_id[0] = 0;
+#ifdef TW_USE_MODEL_HARDWARE_ID_FOR_DEVICE_ID
+	// Now we'll use product_model_hardwareid as device id
+	fp = fopen("/proc/cpuinfo", "rt");
+	if (fp != NULL)
+    {
+		while (fgets(line, sizeof(line), fp) != NULL) { // First step, read the line.
+			if (memcmp(line, CPUINFO_HARDWARE, CPUINFO_HARDWARE_LEN) == 0) {// We're also going to look for the hardware line in cpuinfo and save it for later in case we don't find the device ID
+				// We found the hardware ID
+				token = line + CPUINFO_HARDWARE_LEN; // skip past "Hardware"
+				while ((*token > 0 && *token <= 32 ) || *token == ':')  token++; // skip over all spaces and the colon
+				if (*token != 0) {
+                    token[30] = 0;
+					if (token[strlen(token)-1] == 10) { // checking for endline chars and dropping them from the end of the string if needed
+                        memset(hardware_id, 0, sizeof(hardware_id));
+						strncpy(hardware_id, token, strlen(token) - 1);
+					} else {
+						strcpy(hardware_id, token);
+					}
+					LOGI("=> hardware id from cpuinfo: '%s'\n", hardware_id);
+				}
+			}
+		}
+		fclose(fp);
+    }
+	property_get("ro.product.model", model_id, "error");
+	if (strcmp(model_id,"error") != 0) {
+		LOGI("=> product model: '%s'\n", model_id);
+		// Replace spaces with underscores
+		for(int i = 0; i < strlen(model_id); i++) {
+			if(model_id[i] == ' ')
+			model_id[i] = '_';
+		}
+		strcpy(device_id, model_id);
+		strcat(device_id, "_");
+		strcat(device_id, hardware_id);
+		sanitize_device_id((char *)device_id);
+		mConstValues.insert(make_pair("device_id", device_id));
+		LOGI("=> using device id: '%s'\n", device_id);
+                return;
+	}
+#endif
 #ifndef TW_FORCE_CPUINFO_FOR_DEVICE_ID
     // First, try the cmdline to see if the serial number was supplied
 	fp = fopen("/proc/cmdline", "rt");
